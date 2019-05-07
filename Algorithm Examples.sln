@@ -1,0 +1,31 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio 15
+VisualStudioVersion = 15.0.27130.2010
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Algorithm Examples", "Algorithm Examples\Algorithm Examples.vcxproj", "{96554D95-3227-4D70-B6C5-BFC179B489FE}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Debug|x86 = Debug|x86
+		Release|x64 = Release|x64
+		Release|x86 = Release|x86
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{96554D95-3227-4D70-B6C5-BFC179B489FE}.Debug|x64.ActiveCfg = Debug|x64
+		{96554D95-3227-4D70-B6C5-BFC179B489FE}.Debug|x64.Build.0 = Debug|x64
+		{96554D95-3227-4D70-B6C5-BFC179B489FE}.Debug|x86.ActiveCfg = Debug|Win32
+		{96554D95-3227-4D70-B6C5-BFC179B489FE}.Debug|x86.Build.0 = Debug|Win32
+		{96554D95-3227-4D70-B6C5-BFC179B489FE}.Release|x64.ActiveCfg = Release|x64
+		{96554D95-3227-4D70-B6C5-BFC179B489FE}.Release|x64.Build.0 = Release|x64
+		{96554D95-3227-4D70-B6C5-BFC179B489FE}.Release|x86.ActiveCfg = Release|Win32
+		{96554D95-3227-4D70-B6C5-BFC179B489FE}.Release|x86.Build.0 = Release|Win32
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {0E048E37-44FF-4F60-8A67-63914CC70963}
+	EndGlobalSection
+EndGlobal
