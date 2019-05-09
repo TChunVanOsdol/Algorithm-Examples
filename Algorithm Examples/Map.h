@@ -18,8 +18,13 @@ public:
 	int tilesPerCol;
 	int tileCount;
 	std::vector<tiletype> tiles;
-	int clickPos;
+
+	int mousePos;
 	bool newClick = false;
+	bool endClick = false;
+	bool clickDown = false;
+
+	sf::CircleShape previewUnitDrop;
 
 	Map(sf::RenderWindow & window, int tilesInRow, int tilesInCol);
 	void drawMap(sf::RenderWindow & window);

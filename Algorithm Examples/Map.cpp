@@ -12,6 +12,7 @@ Map::Map(sf::RenderWindow & window, int tilesInRow, int tilesInCol) {
 	tileShape.setSize({ tileW, tileH });
 	tileShape.setOutlineThickness(1.f);
 	tileShape.setOutlineColor(sf::Color::Yellow);
+	previewUnitDrop.setRadius(tileW / 2.f);
 	//Generate vector for tiles
 	tiles = std::vector<tiletype>(tileCount);
 	//Create border of walls
