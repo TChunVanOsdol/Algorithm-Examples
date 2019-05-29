@@ -39,6 +39,11 @@ Map::Map(sf::RenderWindow & window, int tilesInRow, int tilesInCol) {
 	tiles[240] = wall;
 }
 
+Map::~Map() {
+	for (std::list<room*>::reverse_iterator it = rooms.rbegin(); it != rooms.rend(); ++it)
+		delete *it;
+}
+
 void Map::drawMap(sf::RenderWindow & window) {
 	//Move a single rectangle across the board to draw each tile
 	sf::Vector2f tilePos;
@@ -48,8 +53,11 @@ void Map::drawMap(sf::RenderWindow & window) {
 		if (tiles[i] == wall) {
 			tileShape.setFillColor(sf::Color::White);
 		}
-		else {
+		else if (tiles[i] == ground) {
 			tileShape.setFillColor(sf::Color::Black);
+		}
+		else {
+			tileShape.setFillColor(sf::Color::Blue);
 		}
 		window.draw(tileShape);
 	}
@@ -61,6 +69,13 @@ int Map::getTileN(float x, float y) {
 	tileX = int(x / tileW);
 	tileY = int(y / tileH);
 	return tileX + (tileY * tilesPerCol);
+}
+
+int Map::intXYtoN(int x, int y) {
+	if (x < 0 || y < 0 || x >= tilesPerRow || y >= tilesPerCol) {
+		return -1;
+	}
+	return x + y * tilesPerRow;;
 }
 
 sf::Vector2f Map::getTilePos(int N) {
@@ -169,4 +184,614 @@ std::list<int> Map::astar(int start, int end) {
 	//Error! Algorithm ended early (there was probably no path to target)
 	std::list<int> errorList = {start};
 	return errorList;
+}
+
+void Map::generateMap(int seed) {
+	//Generate a map, and use a new seed if provided
+
+	//Create constants to constrain random number generator
+	const int minSize = 2;
+	const int maxSize = 6;
+	const int sizeMod = maxSize - minSize + 1; //Add one to include max value
+	const int minHall = 1;
+	const int maxHall = 2;
+	const int hallMod = maxHall - minHall + 1; //Add one to include max value
+	const int roomDist = 3;
+	const sf::Vector2i posMin = { 1,1 };
+	const sf::Vector2i posMod = { tilesPerRow - minSize - 1, tilesPerCol - minSize - 1 };
+	//Reset random number generator if seed changes
+	if (seed != currentSeed)
+		rng.seed(seed);
+	//Reset map to all wall tiles
+	tiles = std::vector<tiletype>(tileCount, wall);
+	for (std::list<room*>::reverse_iterator it = rooms.rbegin(); it != rooms.rend(); ++it)
+		delete *it;
+	rooms.clear();
+	//Create a set of all tiles that cannot have a new room appear
+	std::set<int> noRoomSpawn;
+	std::set<int> tempRoom;
+	//Create a room starting in the upper-left corner of the map
+	sf::Vector2i roomPos;
+	sf::Vector2i roomSize;
+	int failedRooms = 0;
+	//Count rooms to add halls later
+	//Generate rooms until enough failures happened. There's a lot of room for creative cutoffs!
+	while (failedRooms < 15) {
+		//Reset values
+		bool roomFailed = false;
+		tempRoom.clear();
+		//Pick a new random location for a room
+		roomPos.x = rng() % posMod.x + posMin.x;
+		roomPos.y = rng() % posMod.y + posMin.y;
+		//Check if this room is valid by its width
+		roomSize.x = rng() % sizeMod + minSize;
+		while (roomPos.x + roomSize.x >= tilesPerRow - 1) {
+			--roomSize.x;
+			if (roomSize.x < minSize) {
+				roomFailed = true;
+				++failedRooms;
+				break;
+			}
+		}
+		if (roomFailed)
+			continue;
+		//Check if this room is valid by its height
+		roomSize.y = rng() % sizeMod + minSize;
+		while (roomPos.y + roomSize.y >= tilesPerCol - 1) {
+			--roomSize.y;
+			if (roomSize.y < minSize) {
+				roomFailed = true;
+				++failedRooms;
+				break;
+			}
+		}
+		if (roomFailed)
+			continue;
+		//Iterate through all potential new room tiles
+		for (int y = roomPos.y; y < roomPos.y + roomSize.y; ++y) {
+			for (int x = roomPos.x; x < roomPos.x + roomSize.x; ++x) {
+				if (noRoomSpawn.count(intXYtoN(x, y)) == 0) {
+					//Tile is valid, add to potential new room
+					tempRoom.insert(intXYtoN(x, y));
+				}
+				else {
+					//Tile invalidates this room, room is failed
+					roomFailed = true;
+					++failedRooms;
+					break;
+				}
+			}
+			if (roomFailed) {
+				//If the room failed, no reason to continue iterating through y
+				break;
+			}
+		}
+		//Create room if it wasn't invalidated
+		if (!roomFailed) {
+			rooms.push_back(new room(roomPos, roomSize));
+			for (int tile : tempRoom) {
+				tiles[tile] = ground;
+			}
+			//Iterate through all affected tiles of the new room
+			for (int y = roomPos.y - roomDist; y < roomPos.y + roomSize.y + roomDist; ++y) {
+				for (int x = roomPos.x - roomDist; x < roomPos.x + roomSize.x + roomDist; ++x) {
+					//Prevent all tiles within distance from becoming a new room
+					noRoomSpawn.insert(intXYtoN(x, y));
+					/*if (x >= 0 && y >= 0 && x < tilesPerRow && y < tilesPerCol) {
+						if (tiles[intXYtoN(x, y)] != ground) {
+							tiles[intXYtoN(x, y)] = water;
+						}
+					}*/
+				}
+			}
+		}
+		//std::cout << roomPos.x << " " << roomPos.y << " | " << x << " " << y << std::endl;
+	}
+	hallsByPairs();
+	//hallsWeightedProbs();
+}
+
+void Map::hallsByPairs() {
+	//Create halls by finding a pair of doors and drawing a hallway shape based on the doors' facings
+		//Approach:
+		//Pick two doors of two separate rooms
+		//Face doors towards each other using weighted probabilities based on distance (longer distance is higher chance)
+		//Extend halls from doors using its direction. For 3-link halls, pick a random x or y that both links have
+
+	//Convenience parameters
+	typedef std::pair<sf::Vector2i, room*> doorType;
+	enum dir {
+		east,
+		west,
+		south,
+		north
+	};
+	sf::Vector2i paths[4] = {
+		sf::Vector2i(1,0),
+		sf::Vector2i(-1,0),
+		sf::Vector2i(0,1),
+		sf::Vector2i(0,-1)
+	};
+	//Algorithm parameters
+	std::vector<doorType> doors; //Use a vector to make accessing random elements easier
+	const int borderBuffer = 1; //The space between room and outer border needs to be at least 1
+	//Start algorithm
+	if (!rooms.empty()) {
+		int roomCount = rooms.size();
+		int connectedCount = 0;
+		//Determine door locations
+		for (room * r : rooms) {
+			//Find top and bottom doors
+			for (int y = r->position.y; y < r->position.y + r->size.y; y += r->size.y - 1) {
+				for (int x = r->position.x; x < r->position.x + r->size.x; ++x) {
+					//Add door if location is valid
+					if (x > borderBuffer && y > borderBuffer && x < tilesPerRow - borderBuffer - 1 && y < tilesPerCol - borderBuffer - 1) {
+						doorType newDoor = { sf::Vector2i(x,y), r };
+						doors.push_back(newDoor);
+						r->doorList.push_back(newDoor.first);
+					}
+				}
+			}
+			//Find left and right doors (don't include tiles from top and bottom doors)
+			for (int x = r->position.x; x < r->position.x + r->size.x; x += r->size.x - 1) {
+				for (int y = r->position.y + 1; y < r->position.y + r->size.y - 1; ++y) {
+					//Add door if location is valid
+					if (x > borderBuffer && y > borderBuffer && x < tilesPerRow - borderBuffer - 1 && y < tilesPerCol - borderBuffer - 1) {
+						doorType newDoor = { sf::Vector2i(x,y), r };
+						doors.push_back(newDoor);
+						r->doorList.push_back(newDoor.first);
+					}
+				}
+			}
+		}
+		int doorCount;
+
+		doorType currentDoor;
+		sf::Vector2i currentPos;
+		room * currentRoom;
+		dir currentDir;  //Direction: 0 +x, 1 -x, 2 +y, 3 -y
+
+		doorType targetDoor;
+		sf::Vector2i targetPos;
+		room * targetRoom;
+		dir targetDir;  //Direction: 0 +x, 1 -x, 2 +y, 3 -y
+
+		std::set<int> tempHall; //Use a set since only the integer values are used for setting ground tiles
+
+		//Iterate until all rooms are connected
+		while (connectedCount < roomCount) {
+			//Choose a random door
+			doorCount = doors.size();
+			//If there are no more doors, end the algorithm
+			if (doorCount == 0)
+				break;
+			int doorID = rng() % doorCount;
+			currentDoor = doors[doorID];
+			currentPos = currentDoor.first;
+			currentRoom = currentDoor.second;
+			targetRoom = currentRoom;
+			doors.erase(doors.begin() + doorID);
+			//Choose another random door
+			bool checkingDoor = true;
+			//Use a copy of doors to eliminate doors from same room without removing from main vector
+			std::vector<doorType> testDoors = doors;
+			while (testDoors.size() > 0 && checkingDoor) {
+				doorCount = testDoors.size();
+				doorID = rng() % doorCount;
+				targetDoor = testDoors[doorID];
+				targetPos = targetDoor.first;
+				targetRoom = targetDoor.second;
+				//Check if this door is from the same room
+				if (currentRoom == targetRoom) {
+					testDoors.erase(testDoors.begin() + doorID);
+					continue;
+				}
+				//End loop and remove door from main vector
+				checkingDoor = false;
+				doors.erase(doors.begin() + doorID);
+			}
+			//Clear out hallway set
+			tempHall.clear();
+			//Find directions of doors and build halls
+			sf::Vector2i doorDist = targetPos - currentPos;
+			sf::Vector2i tempPos = currentPos;
+			//Doors are aligned vertically
+			if (doorDist.x == 0) {
+				if (doorDist.y > 0) {
+					currentDir = south;
+				}
+				else {
+					currentDir = north;
+				}
+				//Build hall
+				while (tempPos != targetPos) {
+					tempHall.insert(intXYtoN(tempPos.x, tempPos.y));
+					tempPos += paths[currentDir];
+				}
+			}
+			//Doors are aligned horizontally
+			else if (doorDist.y == 0) {
+				if (doorDist.x > 0) {
+					currentDir = east;
+				}
+				else {
+					currentDir = west;
+				}
+				//Build hall
+				while (tempPos != targetPos) {
+					tempHall.insert(intXYtoN(tempPos.x, tempPos.y));
+					tempPos += paths[currentDir];
+				}
+			}
+			//Doors are not aligned
+			else {
+				//Set current door's direction
+				int dirMod = std::abs(doorDist.x) + std::abs(doorDist.y);
+				int curDir = rng() % dirMod;
+				if (curDir < std::abs(doorDist.x)) {
+					//Door faces horizontally
+					if (doorDist.x > 0) {
+						currentDir = east;
+					}
+					else {
+						currentDir = west;
+					}
+				}
+				else {
+					//Door faces vertically
+					if (doorDist.y > 0) {
+						currentDir = south;
+					}
+					else {
+						currentDir = north;
+					}
+				}
+				//Set target door's direction
+				int tarDir = rng() % dirMod;
+				if (tarDir < std::abs(doorDist.x)) {
+					//Door faces horizontally
+					if (doorDist.x > 0) {
+						targetDir = west;
+					}
+					else {
+						targetDir = east;
+					}
+				}
+				else {
+					//Door faces vertically
+					if (doorDist.y > 0) {
+						targetDir = north;
+					}
+					else {
+						targetDir = south;
+					}
+				}
+				//Check if hall uses 3 links, choose the connecting link
+				if (currentDir + targetDir == 1) {
+					//Horizontal doors, vertical link
+					int linkMod = std::abs(doorDist.x);
+					int linkDist = rng() % linkMod;
+					//Link 1
+					for (int x = 0; x < linkDist; ++x) {
+						tempHall.insert(intXYtoN(tempPos.x, tempPos.y));
+						tempPos += paths[currentDir];
+					}
+					//Link 2
+					dir link2Dir;
+					if (doorDist.y > 0) {
+						link2Dir = south;
+					}
+					else {
+						link2Dir = north;
+					}
+					for (int y = 0; y < std::abs(doorDist.y); ++y) {
+						tempHall.insert(intXYtoN(tempPos.x, tempPos.y));
+						tempPos += paths[link2Dir];
+					}
+					//Link 3
+					for (int x = 0; x < linkMod - linkDist; ++x) {
+						tempHall.insert(intXYtoN(tempPos.x, tempPos.y));
+						tempPos += paths[currentDir];
+					}
+				}
+				else if (currentDir + targetDir == 5) {
+					//Vertical doors, horizontal link
+					int linkMod = std::abs(doorDist.y);
+					int linkDist = rng() % linkMod;
+					//Link 1
+					for (int y = 0; y < linkDist; ++y) {
+						tempHall.insert(intXYtoN(tempPos.x, tempPos.y));
+						tempPos += paths[currentDir];
+					}
+					//Link 2
+					dir link2Dir;
+					if (doorDist.x > 0) {
+						link2Dir = east;
+					}
+					else {
+						link2Dir = west;
+					}
+					for (int x = 0; x < std::abs(doorDist.x); ++x) {
+						tempHall.insert(intXYtoN(tempPos.x, tempPos.y));
+						tempPos += paths[link2Dir];
+					}
+					//Link 3
+					for (int y = 0; y < linkMod - linkDist; ++y) {
+						tempHall.insert(intXYtoN(tempPos.x, tempPos.y));
+						tempPos += paths[currentDir];
+					}
+				}
+				else {
+					//Hall has 2 links (L shaped)
+					int link1Dist;
+					int link2Dist;
+					if (currentDir == east || currentDir == west) {
+						//Traveling horizontally first from current position
+						link1Dist = std::abs(doorDist.x);
+						link2Dist = std::abs(doorDist.y);
+					}
+					else {
+						//Traveling vertically first from current position
+						link1Dist = std::abs(doorDist.y);
+						link2Dist = std::abs(doorDist.x);
+					}
+					//Link 1
+					for (int x = 0; x <= link1Dist; ++x) {
+						tempHall.insert(intXYtoN(tempPos.x, tempPos.y));
+						tempPos += paths[currentDir];
+					}
+					//Link 2
+					tempPos = targetPos;
+					for (int y = 0; y < link2Dist; ++y) {
+						tempHall.insert(intXYtoN(tempPos.x, tempPos.y));
+						tempPos += paths[targetDir];
+					}
+				}
+			}
+			//Make temp hall tiles into ground tiles
+			for (int tile : tempHall) {
+				tiles[tile] = ground;
+			}
+			//Add connected rooms to each other's lists
+			for (room * r : targetRoom->connectedRooms) {
+				currentRoom->connectedRooms.insert(r);
+			}
+			targetRoom->connectedRooms = currentRoom->connectedRooms;
+			//Set connectedCount to this size, if it's bigger
+			int connected = currentRoom->connectedRooms.size();
+			if (connected > connectedCount) {
+				connectedCount = connected;
+			}
+		}
+	}
+}
+
+void Map::hallsWeightedProbs() {
+	//Create halls by checking if all rooms can (eventually) connect to the start room
+		//Approach:
+		//Monte Carlo a door, grow direction probabilities based on nearby rooms
+		//Treat rooms as masses with a center of gravity, use x and y component vectors (with 0,0 as the current tile)
+		//Ground tiles and doors of origin room should have negative gravity (the goal is to move away from this!)
+		//Border tiles also have fixed negative gravity. Traveled tiles and their adjacent tiles are 0 probability
+		//No need to normalize totals, since rng produces a big result. Use a modulus of sum of 4 path probabilities
+		//Consider clamping negatives to 0, or add to all 4 paths such that the lowest is 0
+		//Cornered paths are canceled, start a new search
+
+	//Convenience parameters
+	typedef std::pair<sf::Vector2i, room*> doorType;
+	sf::Vector2i paths[4] = {
+		sf::Vector2i(1,0),
+		sf::Vector2i(-1,0),
+		sf::Vector2i(0,1),
+		sf::Vector2i(0,-1)
+	};
+	struct hall {
+		std::set<int> hallTiles;
+		room * originRoom;
+		hall(std::set<int> tiles, room * roomPtr) : hallTiles(tiles), originRoom(roomPtr) {}
+	};
+	//Algorithm parameters
+	std::vector<doorType> doors;
+	std::list<hall> halls;
+	const int borderBuffer = 2; //The space between room and outer border needs to be at least 2
+	const int doorInitialRange = 3;
+	//Start algorithm
+	if (!rooms.empty()) {
+		int roomCount = rooms.size();
+		int connectedCount = 0;
+		//Determine door locations (determined by the bordering wall tiles)
+		for (room * r : rooms) {
+			//Find top and bottom doors
+			for (int y = r->position.y - 1; y <= r->position.y + r->size.y; y += r->size.y + 1) {
+				for (int x = r->position.x; x < r->position.x + r->size.x; ++x) {
+					//Add door if location is valid
+					if (x > borderBuffer && y > borderBuffer && x < tilesPerRow - borderBuffer - 1 && y < tilesPerCol - borderBuffer - 1) {
+						doorType newDoor = { sf::Vector2i(x,y), r };
+						doors.push_back(newDoor);
+						r->doorList.push_back(newDoor.first);
+						tiles[intXYtoN(x, y)] = water;
+					}
+				}
+			}
+			//Find left and right doors
+			for (int x = r->position.x - 1; x <= r->position.x + r->size.x; x += r->size.x + 1) {
+				for (int y = r->position.y; y < r->position.y + r->size.y; ++y) {
+					//Add door if location is valid
+					if (x > borderBuffer && y > borderBuffer && x < tilesPerRow - borderBuffer - 1 && y < tilesPerCol - borderBuffer - 1) {
+						doorType newDoor = { sf::Vector2i(x,y), r };
+						doors.push_back(newDoor);
+						r->doorList.push_back(newDoor.first);
+						tiles[intXYtoN(x, y)] = water;
+					}
+				}
+			}
+		}
+		int doorCount;
+		doorType currentDoor;
+		std::set<int> tempHall;
+		float pathProbs[4] = { 0,0,0,0 }; //Direction: 0 +x, 1 -x, 2 +y, 3 -y
+		bool buildingHall = true;
+		while (connectedCount < roomCount) {
+			//Choose a random door
+			doorCount = doors.size();
+			currentDoor = doors[rng() % doorCount];
+			room * currentRoom = currentDoor.second;
+			//Begin building hallway
+			buildingHall = true;
+			tempHall.clear();
+			sf::Vector2i tempDoor = currentDoor.first; //This is the test location of the hall, as if the door extruded outwards
+			tempHall.insert(intXYtoN(tempDoor.x, tempDoor.y));
+			sf::Vector2f force;
+			int lastDir = 4; //Index for the last direction traveled. Starts at 4 so that first pass doesn't use this
+			while (buildingHall) {
+				//Reset probabilities
+				for (int i = 0; i < 4; ++i)
+					pathProbs[i] = 0;
+				//Find gravity along x and y
+				for (room * r : rooms) {
+					float mass = r->size.x * r->size.y;
+					if (currentDoor.second == r) {
+						//Origin room, so negate mass to move away rapidly
+						mass *= -1;
+					}
+					sf::Vector2f roomCenter = { r->position.x + r->size.x / 2.f, r->position.y + r->size.y / 2.f };
+					sf::Vector2f distance = roomCenter - sf::Vector2f(tempDoor);
+					//Find force to increase probability of travelling in a direction. Sign of distance chooses which path is increased
+					if (distance.x != 0)
+						force.x = mass / std::powf(distance.x, 2.f);
+					if (distance.y != 0)
+						force.y = mass / std::powf(distance.y, 2.f);
+					if (distance.x > 0) {
+						pathProbs[0] += force.x;
+					}
+					else if (distance.x < 0) {
+						pathProbs[1] += force.x;
+					}
+					if (distance.y > 0) {
+						pathProbs[2] += force.y;
+					}
+					else if (distance.y < 0) {
+						pathProbs[3] += force.y;
+					}
+				}
+				//Set all probabilities to non-negative by adding most negative number
+				float offset = *std::min_element(pathProbs, pathProbs + 4);
+				if (offset < 0) {
+					for (int i = 0; i < 4; ++i) {
+						pathProbs[i] -= offset;
+					}
+				}
+				//Impose constraints and add to total for rng modulus
+				int dirMod = 0;
+				sf::Vector2i tempPath;
+				for (int i = 0; i < 4; ++i) {
+					tempPath = tempDoor + paths[i];
+					//Is the path a floor tile of the origin room?
+					if (tempPath > currentRoom->position && tempPath < currentRoom->position + currentRoom->size) {
+						pathProbs[i] = 0;
+						continue;
+					}
+					//Is the path a door of the origin room?
+					if (std::find(currentRoom->doorList.begin(), currentRoom->doorList.end(), tempPath) != currentRoom->doorList.end()) {
+						pathProbs[i] = 0;
+						continue;
+					}
+					//Is the path a border tile?
+					if (tempPath.x == 0 || tempPath.x == tilesPerRow || tempPath.y == 0 || tempPath.y == tilesPerCol) {
+						pathProbs[i] = 0;
+						continue;
+					}
+					//Is the path on an explore tile?
+					if (tempHall.find(intXYtoN(tempPath.x, tempPath.y)) != tempHall.end()) {
+						pathProbs[i] = 0;
+						continue;
+					}
+					//Add a bonus if this is the same direction as last step
+					if (lastDir == i)
+						pathProbs[i] *= 2.f;
+					//Increase total modulus for the roll. If a number to add is 0, this getting skipped is inconsequential
+					dirMod += int(1000 * pathProbs[i]);
+				}
+				//Roll to check the direction
+				if (dirMod > 0) {
+					int dir = rng() % dirMod;
+					int dirCheck = 0;
+					for (int i = 0; i < 4; ++i) {
+						//Increase the check
+						dirCheck += int(1000 * pathProbs[i]);
+						//The rng rolled more than last check, but lower than this check, so end loop and use new path
+						if (dir < dirCheck) {
+							tempDoor += paths[i];
+							tempHall.insert(intXYtoN(tempDoor.x, tempDoor.y));
+							//Update last direction with this new one
+							lastDir = i;
+							break;
+						}
+					}
+					//Check if this new location is a hall
+					for (std::list<hall>::iterator it = halls.begin(); it != halls.end(); ++it) {
+						hall h = *it;
+						if (h.hallTiles.find(intXYtoN(tempDoor.x, tempDoor.y)) != h.hallTiles.end()) {
+							//Hall connecte to hall, end this while loop
+							buildingHall = false;
+							//Add the connecting rooms' set of rooms to each other
+							for (room * r : h.originRoom->connectedRooms) {
+								currentRoom->connectedRooms.insert(r);
+							}
+							h.originRoom->connectedRooms = currentRoom->connectedRooms;
+							//Set connectedCount to this size, if it's bigger
+							int connected = currentRoom->connectedRooms.size();
+							if (connected > connectedCount) {
+								connectedCount = connected;
+							}
+							//Set all tiles in the temporary hall to actual ground tiles
+							for (int t : tempHall) {
+								tiles[t] = ground;
+							}
+							//Add the hall to the list
+							halls.emplace_back(tempHall, currentRoom);
+							//Remove the door from the vector
+							doors.erase(std::find(doors.begin(), doors.end(), currentDoor));
+							break;
+						}
+					}
+					//No reason to check if the location is a door now that the hall is built
+					if (!buildingHall)
+						continue;
+					//Check if this new location is a door of another room
+					for (std::vector<doorType>::iterator it = doors.begin(); it != doors.end(); ++it) {
+						doorType d = *it;
+						if (d.first == tempDoor && d.second != currentRoom) {
+							//Hall complete, end this while loop
+							buildingHall = false;
+							//Add the connecting rooms' set of rooms to each other
+							for (room * r : d.second->connectedRooms) {
+								currentRoom->connectedRooms.insert(r);
+							}
+							d.second->connectedRooms = currentRoom->connectedRooms;
+							//Set connectedCount to this size, if it's bigger
+							int connected = currentRoom->connectedRooms.size();
+							if (connected > connectedCount) {
+								connectedCount = connected;
+							}
+							//Set all tiles in the temporary hall to actual ground tiles
+							for (int t : tempHall) {
+								tiles[t] = ground;
+							}
+							//Add the hall to the list
+							halls.emplace_back(tempHall, currentRoom);
+							//Remove the doors from the vector
+							doors.erase(it);
+							doors.erase(std::find(doors.begin(), doors.end(), currentDoor));
+							break;
+						}
+					}
+				}
+				//If dirMod is 0, then the hallway hit a dead end
+				else {
+					buildingHall = false;
+				}
+			}
+		}
+	}
 }
