@@ -68,7 +68,7 @@ int Map::getTileN(float x, float y) {
 	int tileX, tileY;
 	tileX = int(x / tileW);
 	tileY = int(y / tileH);
-	return tileX + (tileY * tilesPerCol);
+	return tileX + (tileY * tilesPerRow);
 }
 
 int Map::intXYtoN(int x, int y) {
@@ -193,15 +193,14 @@ void Map::generateMap(int seed) {
 	const int minSize = 2;
 	const int maxSize = 6;
 	const int sizeMod = maxSize - minSize + 1; //Add one to include max value
-	const int minHall = 1;
-	const int maxHall = 2;
-	const int hallMod = maxHall - minHall + 1; //Add one to include max value
 	const int roomDist = 3;
 	const sf::Vector2i posMin = { 1,1 };
 	const sf::Vector2i posMod = { tilesPerRow - minSize - 1, tilesPerCol - minSize - 1 };
 	//Reset random number generator if seed changes
-	if (seed != currentSeed)
+	if (seed != currentSeed) {
 		rng.seed(seed);
+		currentSeed = seed;
+	}
 	//Reset map to all wall tiles
 	tiles = std::vector<tiletype>(tileCount, wall);
 	for (std::list<room*>::reverse_iterator it = rooms.rbegin(); it != rooms.rend(); ++it)
@@ -210,7 +209,7 @@ void Map::generateMap(int seed) {
 	//Create a set of all tiles that cannot have a new room appear
 	std::set<int> noRoomSpawn;
 	std::set<int> tempRoom;
-	//Create a room starting in the upper-left corner of the map
+	//Create vectors for new room location and size
 	sf::Vector2i roomPos;
 	sf::Vector2i roomSize;
 	int failedRooms = 0;
@@ -277,15 +276,9 @@ void Map::generateMap(int seed) {
 				for (int x = roomPos.x - roomDist; x < roomPos.x + roomSize.x + roomDist; ++x) {
 					//Prevent all tiles within distance from becoming a new room
 					noRoomSpawn.insert(intXYtoN(x, y));
-					/*if (x >= 0 && y >= 0 && x < tilesPerRow && y < tilesPerCol) {
-						if (tiles[intXYtoN(x, y)] != ground) {
-							tiles[intXYtoN(x, y)] = water;
-						}
-					}*/
 				}
 			}
 		}
-		//std::cout << roomPos.x << " " << roomPos.y << " | " << x << " " << y << std::endl;
 	}
 	hallsByPairs();
 	//hallsWeightedProbs();
@@ -318,7 +311,7 @@ void Map::hallsByPairs() {
 	//Start algorithm
 	if (!rooms.empty()) {
 		int roomCount = rooms.size();
-		int connectedCount = 0;
+		int connectedCount = 1;
 		//Determine door locations
 		for (room * r : rooms) {
 			//Find top and bottom doors
@@ -328,7 +321,6 @@ void Map::hallsByPairs() {
 					if (x > borderBuffer && y > borderBuffer && x < tilesPerRow - borderBuffer - 1 && y < tilesPerCol - borderBuffer - 1) {
 						doorType newDoor = { sf::Vector2i(x,y), r };
 						doors.push_back(newDoor);
-						r->doorList.push_back(newDoor.first);
 					}
 				}
 			}
@@ -339,7 +331,6 @@ void Map::hallsByPairs() {
 					if (x > borderBuffer && y > borderBuffer && x < tilesPerRow - borderBuffer - 1 && y < tilesPerCol - borderBuffer - 1) {
 						doorType newDoor = { sf::Vector2i(x,y), r };
 						doors.push_back(newDoor);
-						r->doorList.push_back(newDoor.first);
 					}
 				}
 			}
@@ -369,7 +360,6 @@ void Map::hallsByPairs() {
 			currentDoor = doors[doorID];
 			currentPos = currentDoor.first;
 			currentRoom = currentDoor.second;
-			targetRoom = currentRoom;
 			doors.erase(doors.begin() + doorID);
 			//Choose another random door
 			bool checkingDoor = true;
@@ -388,7 +378,7 @@ void Map::hallsByPairs() {
 				}
 				//End loop and remove door from main vector
 				checkingDoor = false;
-				doors.erase(doors.begin() + doorID);
+				doors.erase(std::find(doors.begin(), doors.end(), targetDoor));
 			}
 			//Clear out hallway set
 			tempHall.clear();
@@ -536,13 +526,13 @@ void Map::hallsByPairs() {
 						link2Dist = std::abs(doorDist.x);
 					}
 					//Link 1
-					for (int x = 0; x <= link1Dist; ++x) {
+					for (int i = 0; i <= link1Dist; ++i) {
 						tempHall.insert(intXYtoN(tempPos.x, tempPos.y));
 						tempPos += paths[currentDir];
 					}
 					//Link 2
 					tempPos = targetPos;
-					for (int y = 0; y < link2Dist; ++y) {
+					for (int i = 0; i < link2Dist; ++i) {
 						tempHall.insert(intXYtoN(tempPos.x, tempPos.y));
 						tempPos += paths[targetDir];
 					}
@@ -567,9 +557,9 @@ void Map::hallsByPairs() {
 }
 
 void Map::hallsWeightedProbs() {
-	//Create halls by checking if all rooms can (eventually) connect to the start room
+	//Create halls in steps by weighting probabilities based on the other rooms
 		//Approach:
-		//Monte Carlo a door, grow direction probabilities based on nearby rooms
+		//Extend a door based on a Markov chain, probabilities based on distance to other rooms
 		//Treat rooms as masses with a center of gravity, use x and y component vectors (with 0,0 as the current tile)
 		//Ground tiles and doors of origin room should have negative gravity (the goal is to move away from this!)
 		//Border tiles also have fixed negative gravity. Traveled tiles and their adjacent tiles are 0 probability
@@ -594,11 +584,10 @@ void Map::hallsWeightedProbs() {
 	std::vector<doorType> doors;
 	std::list<hall> halls;
 	const int borderBuffer = 2; //The space between room and outer border needs to be at least 2
-	const int doorInitialRange = 3;
 	//Start algorithm
 	if (!rooms.empty()) {
 		int roomCount = rooms.size();
-		int connectedCount = 0;
+		int connectedCount = 1;
 		//Determine door locations (determined by the bordering wall tiles)
 		for (room * r : rooms) {
 			//Find top and bottom doors
@@ -609,7 +598,7 @@ void Map::hallsWeightedProbs() {
 						doorType newDoor = { sf::Vector2i(x,y), r };
 						doors.push_back(newDoor);
 						r->doorList.push_back(newDoor.first);
-						tiles[intXYtoN(x, y)] = water;
+						//tiles[intXYtoN(x, y)] = water;
 					}
 				}
 			}
@@ -621,7 +610,7 @@ void Map::hallsWeightedProbs() {
 						doorType newDoor = { sf::Vector2i(x,y), r };
 						doors.push_back(newDoor);
 						r->doorList.push_back(newDoor.first);
-						tiles[intXYtoN(x, y)] = water;
+						//tiles[intXYtoN(x, y)] = water;
 					}
 				}
 			}
@@ -630,7 +619,7 @@ void Map::hallsWeightedProbs() {
 		doorType currentDoor;
 		std::set<int> tempHall;
 		float pathProbs[4] = { 0,0,0,0 }; //Direction: 0 +x, 1 -x, 2 +y, 3 -y
-		bool buildingHall = true;
+		bool buildingHall;
 		while (connectedCount < roomCount) {
 			//Choose a random door
 			doorCount = doors.size();
@@ -655,7 +644,8 @@ void Map::hallsWeightedProbs() {
 						mass *= -1;
 					}
 					sf::Vector2f roomCenter = { r->position.x + r->size.x / 2.f, r->position.y + r->size.y / 2.f };
-					sf::Vector2f distance = roomCenter - sf::Vector2f(tempDoor);
+					sf::Vector2f doorCenter = { tempDoor.x + 0.5f, tempDoor.y + 0.5f };
+					sf::Vector2f distance = roomCenter - doorCenter;
 					//Find force to increase probability of travelling in a direction. Sign of distance chooses which path is increased
 					if (distance.x != 0)
 						force.x = mass / std::powf(distance.x, 2.f);
@@ -674,7 +664,7 @@ void Map::hallsWeightedProbs() {
 						pathProbs[3] += force.y;
 					}
 				}
-				//Set all probabilities to non-negative by adding most negative number
+				//Set all probabilities to non-negative by subtracting most negative number
 				float offset = *std::min_element(pathProbs, pathProbs + 4);
 				if (offset < 0) {
 					for (int i = 0; i < 4; ++i) {
@@ -701,7 +691,7 @@ void Map::hallsWeightedProbs() {
 						pathProbs[i] = 0;
 						continue;
 					}
-					//Is the path on an explore tile?
+					//Is the path on an explored tile?
 					if (tempHall.find(intXYtoN(tempPath.x, tempPath.y)) != tempHall.end()) {
 						pathProbs[i] = 0;
 						continue;
@@ -732,7 +722,7 @@ void Map::hallsWeightedProbs() {
 					for (std::list<hall>::iterator it = halls.begin(); it != halls.end(); ++it) {
 						hall h = *it;
 						if (h.hallTiles.find(intXYtoN(tempDoor.x, tempDoor.y)) != h.hallTiles.end()) {
-							//Hall connecte to hall, end this while loop
+							//Hall connected to hall, end this while loop
 							buildingHall = false;
 							//Add the connecting rooms' set of rooms to each other
 							for (room * r : h.originRoom->connectedRooms) {
