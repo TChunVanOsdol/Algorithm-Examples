@@ -224,7 +224,7 @@ void Map::generateMap(int seed) {
 		roomPos.y = rng() % posMod.y + posMin.y;
 		//Check if this room is valid by its width
 		roomSize.x = rng() % sizeMod + minSize;
-		while (roomPos.x + roomSize.x >= tilesPerRow - 1) {
+		while (roomPos.x + roomSize.x > tilesPerRow - 1) {
 			--roomSize.x;
 			if (roomSize.x < minSize) {
 				roomFailed = true;
@@ -236,7 +236,7 @@ void Map::generateMap(int seed) {
 			continue;
 		//Check if this room is valid by its height
 		roomSize.y = rng() % sizeMod + minSize;
-		while (roomPos.y + roomSize.y >= tilesPerCol - 1) {
+		while (roomPos.y + roomSize.y > tilesPerCol - 1) {
 			--roomSize.y;
 			if (roomSize.y < minSize) {
 				roomFailed = true;
@@ -280,8 +280,8 @@ void Map::generateMap(int seed) {
 			}
 		}
 	}
-	hallsByPairs();
-	//hallsWeightedProbs();
+	//hallsByPairs();
+	hallsWeightedProbs();
 }
 
 void Map::hallsByPairs() {
@@ -583,7 +583,7 @@ void Map::hallsWeightedProbs() {
 	//Algorithm parameters
 	std::vector<doorType> doors;
 	std::list<hall> halls;
-	const int borderBuffer = 2; //The space between room and outer border needs to be at least 2
+	const int borderBuffer = 1; //The space between room and outer border needs to be at least 1
 	//Start algorithm
 	if (!rooms.empty()) {
 		int roomCount = rooms.size();
@@ -623,6 +623,8 @@ void Map::hallsWeightedProbs() {
 		while (connectedCount < roomCount) {
 			//Choose a random door
 			doorCount = doors.size();
+			if (doorCount == 0)
+				break;
 			currentDoor = doors[rng() % doorCount];
 			room * currentRoom = currentDoor.second;
 			//Begin building hallway
@@ -646,22 +648,22 @@ void Map::hallsWeightedProbs() {
 					sf::Vector2f roomCenter = { r->position.x + r->size.x / 2.f, r->position.y + r->size.y / 2.f };
 					sf::Vector2f doorCenter = { tempDoor.x + 0.5f, tempDoor.y + 0.5f };
 					sf::Vector2f distance = roomCenter - doorCenter;
-					//Find force to increase probability of travelling in a direction. Sign of distance chooses which path is increased
-					if (distance.x != 0)
-						force.x = mass / std::powf(distance.x, 2.f);
-					if (distance.y != 0)
-						force.y = mass / std::powf(distance.y, 2.f);
+					float distanceMag = std::sqrtf(std::powf(distance.x, 2.f) + std::powf(distance.y, 2.f));
+					float forceMag = mass / std::powf(distanceMag, 2.f);
+					sf::Vector2f forceDir = distance / distanceMag;
+					force = forceMag * forceDir;
+					//Find force to increase probability of traveling in a direction. Sign of distance chooses which path is increased
 					if (distance.x > 0) {
-						pathProbs[0] += force.x;
+						pathProbs[0] += std::copysignf(force.x, mass);
 					}
 					else if (distance.x < 0) {
-						pathProbs[1] += force.x;
+						pathProbs[1] += std::copysignf(force.x, mass);
 					}
 					if (distance.y > 0) {
-						pathProbs[2] += force.y;
+						pathProbs[2] += std::copysignf(force.y, mass);
 					}
 					else if (distance.y < 0) {
-						pathProbs[3] += force.y;
+						pathProbs[3] += std::copysignf(force.y, mass);
 					}
 				}
 				//Set all probabilities to non-negative by subtracting most negative number
@@ -687,7 +689,7 @@ void Map::hallsWeightedProbs() {
 						continue;
 					}
 					//Is the path a border tile?
-					if (tempPath.x == 0 || tempPath.x == tilesPerRow || tempPath.y == 0 || tempPath.y == tilesPerCol) {
+					if (tempPath.x == 0 || tempPath.x == tilesPerRow - 1 || tempPath.y == 0 || tempPath.y == tilesPerCol - 1) {
 						pathProbs[i] = 0;
 						continue;
 					}
