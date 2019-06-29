@@ -344,7 +344,7 @@ void Map::hallsByPairs() {
 
 		doorType targetDoor;
 		sf::Vector2i targetPos;
-		room * targetRoom;
+		room * targetRoom = NULL;
 		dir targetDir;  //Direction: 0 +x, 1 -x, 2 +y, 3 -y
 
 		std::set<int> tempHall; //Use a set since only the integer values are used for setting ground tiles
